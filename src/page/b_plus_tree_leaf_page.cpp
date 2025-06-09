@@ -21,7 +21,15 @@
  * next page id and set max size
  * 未初始化next_page_id
  */
-void LeafPage::Init(page_id_t page_id, page_id_t parent_id, int key_size, int max_size) {}
+void LeafPage::Init(page_id_t page_id, page_id_t parent_id, int key_size, int max_size) {
+  SetPageType(IndexPageType::LEAF_PAGE); // 设置为叶子页
+  SetPageId(page_id);                    // 设置当前页ID
+  SetParentPageId(parent_id);            // 设置父页ID
+  SetKeySize(key_size);                  // 设置键大小
+  SetSize(0);                            // 初始大小为0
+  SetMaxSize(max_size);                  // 设置最大容量
+  SetNextPageId(INVALID_PAGE_ID);        // 初始化下一个页ID为无效值
+}
 
 /**
  * Helper methods to set/get next page id
@@ -46,7 +54,18 @@ void LeafPage::SetNextPageId(page_id_t next_page_id) {
  * 二分查找
  */
 int LeafPage::KeyIndex(const GenericKey *key, const KeyManager &KM) {
-  return 0;
+  // 二分查找第一个 >= key 的位置
+  int left = 0, right = GetSize() - 1;
+  while (left <= right) {
+    int mid = left + (right - left) / 2;
+    GenericKey *mid_key = KeyAt(mid);
+    if (KM.CompareKeys(mid_key, key) < 0) {
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+  return left; // 返回插入位置
 }
 
 /*
@@ -90,7 +109,17 @@ std::pair<GenericKey *, RowId> LeafPage::GetItem(int index) { return {KeyAt(inde
  * @return page size after insertion
  */
 int LeafPage::Insert(GenericKey *key, const RowId &value, const KeyManager &KM) {
-  return 0;
+  int index = KeyIndex(key, KM); // 找到插入位置
+  if (index < GetSize() && KM.CompareKeys(KeyAt(index), key) == 0) {
+    return GetSize(); // 键已存在，直接返回当前大小
+  }
+  // 移动后续键值对腾出空间
+  PairCopy(PairPtrAt(index + 1), PairPtrAt(index), GetSize() - index);
+  // 插入新键值对
+  SetKeyAt(index, key);
+  SetValueAt(index, value);
+  IncreaseSize(1); // 更新大小
+  return GetSize();
 }
 
 /*****************************************************************************
@@ -100,12 +129,21 @@ int LeafPage::Insert(GenericKey *key, const RowId &value, const KeyManager &KM) 
  * Remove half of key & value pairs from this page to "recipient" page
  */
 void LeafPage::MoveHalfTo(LeafPage *recipient) {
+  int split_index = GetMinSize(); // 分裂点
+  recipient->CopyNFrom(PairPtrAt(split_index), GetSize() - split_index);
+  SetSize(split_index); // 更新当前页大小
+  // 更新链表指针
+  recipient->SetNextPageId(GetNextPageId());
+  SetNextPageId(recipient->GetPageId());
 }
 
 /*
  * Copy starting from items, and copy {size} number of elements into me.
  */
 void LeafPage::CopyNFrom(void *src, int size) {
+  int start = GetSize();
+  PairCopy(PairPtrAt(start), src, size); // 复制数据
+  IncreaseSize(size); // 更新大小
 }
 
 /*****************************************************************************
@@ -117,7 +155,12 @@ void LeafPage::CopyNFrom(void *src, int size) {
  * If the key does not exist, then return false
  */
 bool LeafPage::Lookup(const GenericKey *key, RowId &value, const KeyManager &KM) {
-  return false;
+  int index = KeyIndex(key, KM);
+  if (index < GetSize() && KM.CompareKeys(KeyAt(index), key) == 0) {
+    value = ValueAt(index); // 返回对应的RowId
+    return true;
+  }
+  return false; // 键不存在
 }
 
 /*****************************************************************************
@@ -130,7 +173,14 @@ bool LeafPage::Lookup(const GenericKey *key, RowId &value, const KeyManager &KM)
  * @return  page size after deletion
  */
 int LeafPage::RemoveAndDeleteRecord(const GenericKey *key, const KeyManager &KM) {
-  return -1;
+  int index = KeyIndex(key, KM);
+  if (index >= GetSize() || KM.CompareKeys(KeyAt(index), key) != 0) {
+    return GetSize(); // 键不存在，直接返回当前大小
+  }
+  // 移动后续键值对覆盖被删除项
+  PairCopy(PairPtrAt(index), PairPtrAt(index + 1), GetSize() - index - 1);
+  IncreaseSize(-1); // 更新大小
+  return GetSize();
 }
 
 /*****************************************************************************
@@ -141,6 +191,9 @@ int LeafPage::RemoveAndDeleteRecord(const GenericKey *key, const KeyManager &KM)
  * to update the next_page id in the sibling page
  */
 void LeafPage::MoveAllTo(LeafPage *recipient) {
+  recipient->CopyNFrom(PairPtrAt(0), GetSize());
+  recipient->SetNextPageId(GetNextPageId()); // 维护链表指针
+  SetSize(0); // 清空当前页
 }
 
 /*****************************************************************************
@@ -151,18 +204,41 @@ void LeafPage::MoveAllTo(LeafPage *recipient) {
  *
  */
 void LeafPage::MoveFirstToEndOf(LeafPage *recipient) {
+  // 1. 获取第一个键值对
+  GenericKey *first_key = KeyAt(0);
+  RowId first_value = ValueAt(0);
+
+  // 2. 将第一个键值对插入到接收页的末尾
+  recipient->CopyLastFrom(first_key, first_value);
+
+  // 3. 删除当前页的第一个键值对（通过移动后续元素覆盖）
+  PairCopy(PairPtrAt(0), PairPtrAt(1), GetSize() - 1);
+  IncreaseSize(-1); // 更新大小
 }
 
 /*
  * Copy the item into the end of my item list. (Append item to my array)
  */
 void LeafPage::CopyLastFrom(GenericKey *key, const RowId value) {
+  SetKeyAt(GetSize(), key);
+  SetValueAt(GetSize(), value);
+  IncreaseSize(1);
 }
 
 /*
  * Remove the last key & value pair from this page to "recipient" page.
  */
 void LeafPage::MoveLastToFrontOf(LeafPage *recipient) {
+  // 1. 获取最后一个键值对
+  int last_index = GetSize() - 1;
+  GenericKey *last_key = KeyAt(last_index);
+  RowId last_value = ValueAt(last_index);
+
+  // 2. 将最后一个键值对插入到接收页的头部
+  recipient->CopyFirstFrom(last_key, last_value);
+
+  // 3. 删除当前页的最后一个键值对
+  IncreaseSize(-1); // 直接减少大小即可
 }
 
 /*
@@ -170,4 +246,8 @@ void LeafPage::MoveLastToFrontOf(LeafPage *recipient) {
  *
  */
 void LeafPage::CopyFirstFrom(GenericKey *key, const RowId value) {
+  PairCopy(PairPtrAt(1), PairPtrAt(0), GetSize());
+  SetKeyAt(0, key);
+  SetValueAt(0, value);
+  IncreaseSize(1);
 }
