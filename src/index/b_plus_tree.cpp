@@ -311,7 +311,7 @@ void BPlusTree::Remove(const GenericKey *key, Txn *transaction) {
     buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
     return;
   }
-  if (new_size == leaf->GetSize()) {
+  if (new_size == old_size) {
     buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
     return;
   }
