@@ -38,12 +38,15 @@ uint32_t IndexMetadata::SerializeTo(char *buf) const {
   ASSERT(buf - p == ofs, "Unexpected serialize size.");
   return ofs;
 }
-
+ 
 /**
  * TODO: Student Implement
  */
 uint32_t IndexMetadata::GetSerializedSize() const {
-  return 0;
+    uint32_t size = sizeof(INDEX_METADATA_MAGIC_NUM) + sizeof(index_id_t) + sizeof(table_id_t) + sizeof(uint32_t); // magic num + index_id + table_id + key_map size
+    size += index_name_.length() + sizeof(uint32_t); // length of index_name
+    size += key_map_.size() * sizeof(uint32_t); // size of key_map
+    return size;
 }
 
 uint32_t IndexMetadata::DeserializeFrom(char *buf, IndexMetadata *&index_meta) {
