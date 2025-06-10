@@ -172,9 +172,7 @@ void BPlusTree::StartNewTree(GenericKey *key, const RowId &value) {
  */
 bool BPlusTree::InsertIntoLeaf(GenericKey *key, const RowId &value, Txn *transaction) {
   Page *leaf_page = FindLeafPage(key, root_page_id_, false);
-  if (leaf_page == nullptr) {
-    return false;
-  }
+  if (leaf_page == nullptr)  return false;
   RowId row_id;
   auto *leaf = reinterpret_cast<LeafPage *>(leaf_page->GetData());
 
@@ -300,19 +298,15 @@ void BPlusTree::InsertIntoParent(BPlusTreePage *old_node, GenericKey *key, BPlus
  * necessary.
  */
 void BPlusTree::Remove(const GenericKey *key, Txn *transaction) {
-  if (IsEmpty()) return; // If empty, return
-  Page *leaf_page = FindLeafPage(key, root_page_id_, false);
-  if (leaf_page == nullptr) return;  // Key not found
-  auto *leaf = reinterpret_cast<LeafPage *>(leaf_page->GetData());
+  if (IsEmpty()) return; // 空
+  Page *page = FindLeafPage(key, root_page_id_, false);
+  if (page == nullptr) return;  // 没找到
+  auto *leaf = reinterpret_cast<LeafPage *>(page->GetData());
 
-  int old_size = leaf->GetSize();
-  int new_size = leaf->RemoveAndDeleteRecord(key, processor_);
-  if (new_size == -1) {
-    buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
-    return;
-  }
-  if (new_size == old_size) {
-    buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
+  int size = leaf->RemoveAndDeleteRecord(key, processor_);
+  // 如果 key 不存在或删除失败，直接返回
+  if (size == -1 || size == leaf->GetSize()) {
+    buffer_pool_manager_->UnpinPage(page->GetPageId(), false);
     return;
   }
   // Case 1: 如果是根节点
@@ -320,29 +314,33 @@ void BPlusTree::Remove(const GenericKey *key, Txn *transaction) {
     if (leaf->GetSize() == 0 && AdjustRoot(leaf)) {
       buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
       buffer_pool_manager_->DeletePage(leaf->GetPageId());
+      return;
     }
-    buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), true);
+    buffer_pool_manager_->UnpinPage(page->GetPageId(), true);
     return;
   }
   // Case 2: 非根节点
-  bool should_update_parent = (new_size >= 0);  // Only update if leaf is non-empty
-  if (new_size < leaf->GetMinSize()) {
+  bool should_update_parent = (size >= 0);
+  if (size < leaf->GetMinSize()) {
     CoalesceOrRedistribute(leaf, transaction);
     return;
-  } else if (should_update_parent) {
+  }
+  if (should_update_parent) {
     // 如果没有发生合并或重分布，则更新浮木节点的分隔键
     page_id_t ParentId = leaf->GetParentPageId();
     Page *parent_page = buffer_pool_manager_->FetchPage(ParentId);
     auto *parent_node = reinterpret_cast<InternalPage *>(parent_page->GetData());
-    int node_index = parent_node->ValueIndex(leaf->GetPageId());
 
+    int node_index = parent_node->ValueIndex(leaf->GetPageId());
     // 只有当不是最左子节点时才更新（内部节点中的第一个键是虚拟的）
     if (node_index > 0) {
       parent_node->SetKeyAt(node_index, leaf->KeyAt(0));
     }
 
     buffer_pool_manager_->UnpinPage(parent_page->GetPageId(), true);
+    buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
   }
+  buffer_pool_manager_->UnpinPage(page->GetPageId(), true);
 }
 
 /* todo
