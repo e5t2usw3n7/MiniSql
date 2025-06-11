@@ -28,7 +28,8 @@ uint32_t TableMetadata::SerializeTo(char *buf) const {
  * TODO: Student Implement
  */
 uint32_t TableMetadata::GetSerializedSize() const {
-    uint32_t size = sizeof(TABLE_METADATA_MAGIC_NUM) + sizeof(table_id_t) + MACH_STR_SERIALIZED_SIZE(table_name_) + sizeof(page_id_t);
+    uint32_t size = sizeof(TABLE_METADATA_MAGIC_NUM) + sizeof(table_id_t) + MACH_STR_SERIALIZED_SIZE(table_name_)
+                    + sizeof(page_id_t);
     size += schema_->GetSerializedSize(); // Schema的序列化大小
     return size;
 }
@@ -64,6 +65,9 @@ uint32_t TableMetadata::DeserializeFrom(char *buf, TableMetadata *&table_meta) {
   table_meta = new TableMetadata(table_id, table_name, root_page_id, schema);
   return buf - p;
 }
+
+
+
 
 /**
  * Only called by create table

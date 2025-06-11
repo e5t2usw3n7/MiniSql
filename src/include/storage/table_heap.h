@@ -113,7 +113,17 @@ class TableHeap {
         schema_(schema),
         log_manager_(log_manager),
         lock_manager_(lock_manager) {
-    ASSERT(false, "Not implemented yet.");
+    // Allocate a page to be the first page of the table.
+    page_id_t page_id;
+    auto first_page = reinterpret_cast<TablePage *>(buffer_pool_manager_->NewPage(page_id));
+    ASSERT(first_page != nullptr, "Failed to create the first page."); // Ensure page creation succeeded
+
+    // Store the page id and initialize the page header.
+    this->first_page_id_ = page_id;
+    first_page->Init(first_page_id_, INVALID_PAGE_ID, log_manager_, txn);
+
+    // Unpin the page after initialization. The page is dirty and must be flushed.
+    buffer_pool_manager_->UnpinPage(first_page_id_, true);
   };
 
   explicit TableHeap(BufferPoolManager *buffer_pool_manager, page_id_t first_page_id, Schema *schema,
