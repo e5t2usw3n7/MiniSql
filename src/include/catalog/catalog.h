@@ -25,11 +25,11 @@ class CatalogMeta {
   uint32_t GetSerializedSize() const;
 
   inline table_id_t GetNextTableId() const {
-    return table_meta_pages_.size() == 0 ? 0 : table_meta_pages_.rbegin()->first + 1;
+    return table_meta_pages_.empty() ? 0 : table_meta_pages_.rbegin()->first + 1;
   }
 
   inline index_id_t GetNextIndexId() const {
-    return index_meta_pages_.size() == 0 ? 0 : index_meta_pages_.rbegin()->first + 1;
+    return index_meta_pages_.empty() ? 0 : index_meta_pages_.rbegin()->first + 1;
   }
 
   static CatalogMeta *NewInstance() { return new CatalogMeta(); }
@@ -84,7 +84,7 @@ class CatalogManager {
 
   dberr_t CreateIndex(const std::string &table_name, const std::string &index_name,
                       const std::vector<std::string> &index_keys, Txn *txn, IndexInfo *&index_info,
-                      const string &index_type);
+                      const std::string &index_type);
 
   dberr_t GetIndex(const std::string &table_name, const std::string &index_name, IndexInfo *&index_info) const;
 

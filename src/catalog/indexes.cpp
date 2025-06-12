@@ -83,7 +83,7 @@ uint32_t IndexMetadata::DeserializeFrom(char *buf, IndexMetadata *&index_meta) {
   index_meta = new IndexMetadata(index_id, index_name, table_id, key_map);
   return buf - p;
 }
-
+ 
 Index *IndexInfo::CreateIndex(BufferPoolManager *buffer_pool_manager, const string &index_type) {
   size_t max_size = 0;
   uint32_t column_cnt = key_schema_->GetColumns().size();

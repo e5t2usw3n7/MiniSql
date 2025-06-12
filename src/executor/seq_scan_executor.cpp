@@ -2,6 +2,7 @@
 // Created by njz on 2023/1/17.
 //
 #include "executor/executors/seq_scan_executor.h"
+#include "record/field.h"
 
 SeqScanExecutor::SeqScanExecutor(ExecuteContext *exec_ctx, const SeqScanPlanNode *plan)
     : AbstractExecutor(exec_ctx),
@@ -52,6 +53,7 @@ bool SeqScanExecutor::Next(Row *row, RowId *rid) {
   while (iterator_ != table_info_->GetTableHeap()->End()) {
     auto p_row = &(*iterator_);
     if (predicate != nullptr) {
+
       if (!predicate->Evaluate(p_row).CompareEquals(Field(kTypeInt, 1))) {
         iterator_++;
         continue;
