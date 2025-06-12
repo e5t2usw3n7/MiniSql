@@ -19,24 +19,31 @@ IndexIterator::~IndexIterator() {
  * TODO: Student Implement
  */
 std::pair<GenericKey *, RowId> IndexIterator::operator*() {
-  return std::make_pair(page->KeyAt(item_index), page->ValueAt(item_index));
+  return page->GetItem(item_index);
 }
 
 /**
  * TODO: Student Implement
  */
 IndexIterator &IndexIterator::operator++() {
-  if (item_index + 1 < page->GetSize()) {
+  if (current_page_id == INVALID_PAGE_ID || page == nullptr) {
+    return *this;
+  }
+  // 如果对不上就移动到当前页的下一个元素
+  if (item_index != page->GetSize()) {
     item_index++;
   } else {
     page_id_t next_page_id = page->GetNextPageId();
+
+    // 释放当前页
     buffer_pool_manager->UnpinPage(current_page_id, false);
+    // 获取下一页
     current_page_id = next_page_id;
+    Page *next_page = buffer_pool_manager->FetchPage(current_page_id);
+    page = reinterpret_cast<LeafPage *>(next_page->GetData());
     item_index = 0;
-    if (current_page_id != INVALID_PAGE_ID) {
-      page = reinterpret_cast<LeafPage *>(buffer_pool_manager->FetchPage(current_page_id)->GetData());
-    }
   }
+
   return *this;
 }
 
