@@ -66,11 +66,15 @@ CatalogManager::CatalogManager(BufferPoolManager *buffer_pool_manager, LockManag
                                LogManager *log_manager, bool init)
     : buffer_pool_manager_(buffer_pool_manager), lock_manager_(lock_manager), log_manager_(log_manager) {
   if (!init) {
+    // 获取元数据页面
     Page *meta_page = buffer_pool_manager_->FetchPage(CATALOG_META_PAGE_ID);
     catalog_meta_ = CatalogMeta::DeserializeFrom(reinterpret_cast<char *>(meta_page->GetData()));
-    next_index_id_ = catalog_meta_->GetNextIndexId();
-    next_table_id_ = catalog_meta_->GetNextTableId();
 
+    // 获取当前的 next_table_id_ 和 next_index_id_
+    next_table_id_ = std::max(static_cast<unsigned int>(next_table_id_.load()), catalog_meta_->GetNextTableId());
+    next_index_id_ = std::max(static_cast<unsigned int>(next_index_id_.load()), catalog_meta_->GetNextIndexId());
+
+    // 加载表的元数据
     for (const auto &entry : catalog_meta_->table_meta_pages_) {
       page_id_t table_meta_pid = entry.second;
       Page *table_meta_page = buffer_pool_manager_->FetchPage(table_meta_pid);
@@ -78,22 +82,25 @@ CatalogManager::CatalogManager(BufferPoolManager *buffer_pool_manager, LockManag
       TableMetadata::DeserializeFrom(table_meta_page->GetData(), table_meta);
       buffer_pool_manager_->UnpinPage(table_meta_pid, true);
 
-      std::string tbl_name = table_meta->GetTableName();
+      // 获取表信息并保存
       table_id_t tbl_id = table_meta->GetTableId();
+      std::string tbl_name = table_meta->GetTableName();
       table_names_[tbl_name] = tbl_id;
 
+      // 创建表堆
       TableHeap *tbl_heap = TableHeap::Create(buffer_pool_manager_, table_meta->GetFirstPageId(),
                                                table_meta->GetSchema(), log_manager_, lock_manager_);
 
+      // 创建表信息对象
       TableInfo *tbl_info = TableInfo::Create();
       tbl_info->Init(table_meta, tbl_heap);
       tables_[tbl_id] = tbl_info;
 
-      if (tbl_id >= next_table_id_) {
-        next_table_id_ = tbl_id + 1;
-      }
+      // 更新 next_table_id_
+      next_table_id_ = std::max(next_table_id_.load(), tbl_id + 1);
     }
 
+    // 加载索引的元数据
     for (const auto &entry : catalog_meta_->index_meta_pages_) {
       page_id_t index_meta_pid = entry.second;
       Page *index_meta_page = buffer_pool_manager_->FetchPage(index_meta_pid);
@@ -101,20 +108,21 @@ CatalogManager::CatalogManager(BufferPoolManager *buffer_pool_manager, LockManag
       IndexMetadata::DeserializeFrom(index_meta_page->GetData(), index_meta);
       buffer_pool_manager_->UnpinPage(index_meta_pid, true);
 
+      // 获取索引信息并保存
+      index_id_t idx_id = index_meta->GetIndexId();
       table_id_t tid = index_meta->GetTableId();
       std::string table_name = tables_[tid]->GetTableName();
       std::string index_name = index_meta->GetIndexName();
-      index_id_t iid = index_meta->GetIndexId();
 
-      index_names_[table_name][index_name] = iid;
+      index_names_[table_name][index_name] = idx_id;
 
+      // 创建索引信息对象
       IndexInfo *idx_info = IndexInfo::Create();
       idx_info->Init(index_meta, tables_[tid], buffer_pool_manager_);
-      indexes_[iid] = idx_info;
+      indexes_[idx_id] = idx_info;
 
-      if (iid >= next_index_id_) {
-        next_index_id_ = iid + 1;
-      }
+      // 更新 next_index_id_
+      next_index_id_ = std::max(next_index_id_.load(), idx_id + 1);
     }
 
   } else {
@@ -138,43 +146,48 @@ CatalogManager::~CatalogManager() {
 /**
  * TODO: Student Implement
  */
+//////
 dberr_t CatalogManager::CreateTable(const string &table_name, TableSchema *schema, Txn *txn, TableInfo *&table_info) {
+  // 检查表是否已存在
   if (table_names_.find(table_name) != table_names_.end()) {
     return DB_TABLE_ALREADY_EXIST;
   }
 
-  // 拷贝表结构
-  IndexSchema *copied_schema = Schema::DeepCopySchema(schema);
+  // 使用 Schema 的拷贝构造函数进行深拷贝
+  std::vector<Column *> columns = schema->GetColumns();  // 获取列的列表
+  TableSchema *copied_schema = new TableSchema(columns, true);  // 通过列和默认的 is_manage_ 参数构造表结构
 
-  // 获取新表 ID，注册表名
+  // 获取新表 ID，并将表名与表 ID 进行映射
   table_id_t current_table_id = next_table_id_;
-  table_names_.emplace(table_name, current_table_id);
+  table_names_[table_name] = current_table_id;
 
-  // 申请新页用于存放表元数据
+  // 创建新的页来存放表的元数据
   page_id_t meta_page_id;
   Page *meta_page = buffer_pool_manager_->NewPage(meta_page_id);
 
-  // 创建表堆对象
+  // 创建并初始化表堆
   TableHeap *heap = TableHeap::Create(buffer_pool_manager_, copied_schema, txn, log_manager_, lock_manager_);
 
-  // 构建并序列化表元数据
-  TableMetadata *meta = TableMetadata::Create(current_table_id, table_name, heap->GetFirstPageId(), copied_schema);
-  meta->SerializeTo(meta_page->GetData());
+  // 创建表的元数据对象并将其序列化
+  TableMetadata *table_metadata = TableMetadata::Create(current_table_id, table_name, heap->GetFirstPageId(), copied_schema);
+  table_metadata->SerializeTo(meta_page->GetData());
   buffer_pool_manager_->UnpinPage(meta_page_id, true);
 
-  // 记录表元数据页位置
+  // 记录表的元数据页 ID
   catalog_meta_->table_meta_pages_[current_table_id] = meta_page_id;
 
-  // 创建表信息对象，初始化并登记
+  // 创建表信息对象并进行初始化
   table_info = TableInfo::Create();
-  table_info->Init(meta, heap);
+  table_info->Init(table_metadata, heap);
   tables_[current_table_id] = table_info;
 
-  // 更新下一个表 ID
+  // 更新下一个表的 ID
   next_table_id_++;
 
-  return DB_SUCCESS;
+  // 持久化表的元数据
+  FlushCatalogMetaPage();  // 持久化更新后的表元数据
 
+  return DB_SUCCESS;
 }
 
 /**
@@ -259,25 +272,34 @@ dberr_t CatalogManager::CreateIndex(const std::string &table_name, const string 
 
     return DB_SUCCESS;
 }
-
+ 
 /**
  * TODO: Student Implement
  */
 dberr_t CatalogManager::GetIndex(const std::string &table_name, const std::string &index_name,
                                  IndexInfo *&index_info) const {
-  auto index_table = index_names_.find(table_name);
-  if (index_table == index_names_.end())
-  {
-    return DB_TABLE_NOT_EXIST;
-  }
-  auto index = index_table->second.find(index_name);
-  if (index == index_table->second.end())
-  {
-    return DB_INDEX_NOT_FOUND;
-  }
-  auto index_id = index->second;
-  index_info = indexes_.find(index_id)->second;
-  return DB_SUCCESS;
+    // 查找表名是否存在
+    auto table_iter = index_names_.find(table_name);
+    if (table_iter == index_names_.end()) {
+        return DB_TABLE_NOT_EXIST;  // 表不存在，返回错误
+    }
+
+    // 查找索引名是否存在
+    auto index_iter = table_iter->second.find(index_name);
+    if (index_iter == table_iter->second.end()) {
+        return DB_INDEX_NOT_FOUND;  // 索引不存在，返回错误
+    }
+
+    // 获取索引 ID 并找到对应的索引信息
+    index_id_t index_id = index_iter->second;
+    index_info = indexes_.count(index_id) > 0 ? indexes_.at(index_id) : nullptr;
+
+    // 如果没有找到索引信息，返回错误
+    if (index_info == nullptr) {
+        return DB_INDEX_NOT_FOUND;
+    }
+
+    return DB_SUCCESS;  // 成功找到索引
 }
 
 /**
